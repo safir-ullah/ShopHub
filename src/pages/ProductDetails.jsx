@@ -1,6 +1,5 @@
-
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import QuantityControl from "../components/QuantityControl";
 import PageState from "../components/PageState";
@@ -11,50 +10,68 @@ import { useWishlist } from "../context/WishlistContext";
 
 function ProductDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
 
   const { addItem, buyNow } = useCart();
-
-  const {
-    toggleWishlist,
-    isSaved,
-  } = useWishlist();
+  const { toggleWishlist, isSaved } = useWishlist();
 
   const [product, setProduct] = useState(null);
+  const [quantity, setQuantity] = useState(1);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState("");
-  const [quantity, setQuantity] = useState(1);
-  const [addedMessage, setAddedMessage] = useState("");
-
-  async function loadProduct(signal) {
-    try {
-      setStatus("loading");
-      setError("");
-      setProduct(null);
-
-      const data = await getProduct(id, signal);
-
-      setProduct(data);
-      setQuantity(1);
-      setStatus("success");
-    } catch (error) {
-      if (error.name === "AbortError") {
-        return;
-      }
-
-      setError(error.message);
-      setStatus("error");
-    }
-  }
 
   useEffect(() => {
-    const controller = new AbortController();
+    let isMounted = true;
 
-    loadProduct(controller.signal);
+    async function loadProduct() {
+      setStatus("loading");
+      setError("");
+
+      try {
+        const result = await getProduct(id);
+
+        if (!isMounted) return;
+
+        if (!result) {
+          setProduct(null);
+          setStatus("not-found");
+          return;
+        }
+
+        setProduct(result);
+        setQuantity(1);
+        setStatus("success");
+      } catch (err) {
+        if (!isMounted) return;
+
+        console.error("Failed to load product:", err);
+
+        setError(
+          err?.message || "Unable to load this product. Please try again."
+        );
+
+        setStatus("error");
+      }
+    }
+
+    loadProduct();
 
     return () => {
-      controller.abort();
+      isMounted = false;
     };
   }, [id]);
+
+  function handleQuantityChange(value) {
+    if (!product) return;
+
+    const maxQuantity = Math.max(1, product.stock || 1);
+    const nextQuantity = Math.min(
+      Math.max(1, value),
+      maxQuantity
+    );
+
+    setQuantity(nextQuantity);
+  }
 
   function handleAddToCart() {
     if (!product || product.stock <= 0) {
@@ -63,16 +80,8 @@ function ProductDetails() {
 
     const success = addItem(product, quantity);
 
-    if (success) {
-      setAddedMessage(
-        `${quantity} ${
-          quantity === 1 ? "item" : "items"
-        } added to your cart.`
-      );
-
-      setTimeout(() => {
-        setAddedMessage("");
-      }, 3000);
+    if (success === false) {
+      return;
     }
   }
 
@@ -83,430 +92,280 @@ function ProductDetails() {
 
     if (buyNow) {
       buyNow(product, quantity);
-      window.location.href = "/checkout";
     } else {
       const success = addItem(product, quantity);
 
-      if (success) {
-        window.location.href = "/checkout";
+      if (success === false) {
+        return;
       }
     }
+
+    // Use React Router instead of window.location.href.
+    // This prevents Vercel from treating /checkout as a physical file.
+    navigate("/checkout");
   }
 
   function handleWishlistToggle() {
-    if (!product) {
-      return;
-    }
+    if (!product) return;
 
     toggleWishlist(product);
   }
 
   if (status === "loading") {
     return (
-      <main className="shop-page-shell">
-        <div className="shop-container">
-          <PageState type="loading" />
-        </div>
-      </main>
+      <PageState
+        type="loading"
+        title="Loading product..."
+        message="Please wait while we load the product details."
+      />
     );
   }
 
   if (status === "error") {
     return (
-      <main className="shop-page-shell">
-        <div className="shop-container">
-          <PageState
-            type="error"
-            message={error}
-            onRetry={() => loadProduct()}
-          />
-        </div>
-      </main>
+      <PageState
+        type="error"
+        title="Unable to load product"
+        message={error}
+      />
     );
   }
 
-  if (!product) {
+  if (status === "not-found" || !product) {
     return (
-      <main className="shop-page-shell">
-        <div className="shop-container">
-          <PageState
-            type="error"
-            message="Product not found."
-          />
-        </div>
-      </main>
+      <PageState
+        type="empty"
+        title="Product not found"
+        message="The product you are looking for does not exist or is no longer available."
+      />
     );
   }
 
-  const isOutOfStock = product.stock <= 0;
-  const saved = isSaved(product.id);
+  const isOutOfStock =
+    !product.stock || product.stock <= 0;
 
-  const rating = product.rating
-    ? product.rating.toFixed(1)
-    : "N/A";
+  // FIXED:
+  // The WishlistContext provides "isSaved",
+  // not "isWishlisted".
+  const wishlisted = isSaved(product.id);
 
-  const reviewCount = product.reviews?.length || 0;
+  const productImage =
+    product.image ||
+    product.imageUrl ||
+    product.thumbnail ||
+    "https://via.placeholder.com/600x600?text=No+Image";
+
+  const price = Number(product.price || 0);
 
   return (
-    <main className="product-details-page">
-      <div className="shop-container">
+    <div className="product-details-page">
+      <div className="container py-4">
 
         {/* Breadcrumb */}
         <nav
-          className="product-breadcrumb"
           aria-label="breadcrumb"
+          className="mb-4"
         >
-          <Link to="/">Home</Link>
-          <span aria-hidden="true">/</span>
-          <Link to="/products">Products</Link>
-          <span aria-hidden="true">/</span>
-          <span className="product-breadcrumb-current">
-            {product.title}
-          </span>
+          <ol className="breadcrumb">
+
+            <li className="breadcrumb-item">
+              <Link to="/">Home</Link>
+            </li>
+
+            <li className="breadcrumb-item">
+              <Link to="/products">Products</Link>
+            </li>
+
+            <li
+              className="breadcrumb-item active"
+              aria-current="page"
+            >
+              {product.title ||
+                product.name ||
+                "Product"}
+            </li>
+
+          </ol>
         </nav>
 
-        {/* Main Product Area */}
-        <section className="product-details-layout">
+        {/* Product Details */}
+        <div className="row g-4">
 
-          {/* =========================================
-              LEFT — PRODUCT VISUAL
-              ========================================= */}
-          <div className="product-details-visual">
-
-            <div className="product-details-image-card">
-
-              {/* Decorative background */}
-              <div
-                className="product-details-glow"
-                aria-hidden="true"
+          {/* Product Image */}
+          <div className="col-lg-6">
+            <div className="product-details-image-wrapper">
+              <img
+                src={productImage}
+                alt={
+                  product.title ||
+                  product.name ||
+                  "Product"
+                }
+                className="product-details-image img-fluid"
               />
-
-              <div
-                className="product-details-image-stage"
-                data-category={product.category}
-              >
-                <span className="product-details-floating-label">
-                  Premium Pick
-                </span>
-
-                <img
-                  src={product.thumbnail}
-                  alt={product.title}
-                  className="product-details-image"
-                />
-              </div>
-
-              {/* Image footer */}
-              <div className="product-visual-footer">
-                <div>
-                  <span className="product-visual-footer-label">
-                    Product ID
-                  </span>
-
-                  <strong>
-                    #{product.id}
-                  </strong>
-                </div>
-
-                <div className="product-visual-category">
-                  {product.category}
-                </div>
-              </div>
-            </div>
-
-            {/* Trust Cards */}
-            <div className="product-trust-grid">
-
-              <div className="product-trust-card">
-                <span className="product-trust-icon">
-                  ✓
-                </span>
-
-                <div>
-                  <strong>Quality Product</strong>
-                  <span>Carefully selected</span>
-                </div>
-              </div>
-
-              <div className="product-trust-card">
-                <span className="product-trust-icon">
-                  ⚡
-                </span>
-
-                <div>
-                  <strong>Fast Shopping</strong>
-                  <span>Simple checkout</span>
-                </div>
-              </div>
-
-              <div className="product-trust-card">
-                <span className="product-trust-icon">
-                  ♡
-                </span>
-
-                <div>
-                  <strong>Save for Later</strong>
-                  <span>Add to wishlist</span>
-                </div>
-              </div>
-
-              <div className="product-trust-card">
-                <span className="product-trust-icon">
-                  🚚
-                </span>
-
-                <div>
-                  <strong>Free Delivery</strong>
-                  <span>Always included</span>
-                </div>
-              </div>
-
             </div>
           </div>
 
-          {/* =========================================
-              RIGHT — PRODUCT INFORMATION
-              ========================================= */}
-          <div className="product-details-info">
+          {/* Product Information */}
+          <div className="col-lg-6">
+            <div className="product-details-content">
 
-            {/* Category */}
-            <div className="product-details-category-row">
-              <span className="product-details-category">
-                {product.category}
-              </span>
-
-              {isOutOfStock ? (
-                <span className="product-details-stock out">
-                  Out of Stock
-                </span>
-              ) : (
-                <span className="product-details-stock">
-                  <span className="stock-dot" />
-                  In Stock
-                </span>
+              {/* Category */}
+              {product.category && (
+                <p className="text-muted text-uppercase small mb-2">
+                  {product.category}
+                </p>
               )}
-            </div>
 
-            {/* Title */}
-            <h1 className="product-details-title">
-              {product.title}
-            </h1>
+              {/* Product Title */}
+              <h1 className="product-details-title mb-3">
+                {product.title || product.name}
+              </h1>
 
-            {/* Rating */}
-            <div className="product-details-rating">
-              <div className="rating-stars-large">
-                {"★".repeat(
-                  Math.max(
-                    0,
-                    Math.min(5, Math.round(product.rating || 0))
-                  )
+              {/* Rating */}
+              {product.rating !== undefined &&
+                product.rating !== null && (
+                  <div className="product-details-rating mb-3">
+                    <span className="me-2">
+                      ⭐
+                    </span>
+
+                    <strong>
+                      {Number(product.rating).toFixed(1)}
+                    </strong>
+                  </div>
+                )}
+
+              {/* Price */}
+              <div className="product-details-price mb-4">
+                ${price.toFixed(2)}
+              </div>
+
+              {/* Description */}
+              {product.description && (
+                <div className="product-details-description mb-4">
+                  <h5>Description</h5>
+                  <p>{product.description}</p>
+                </div>
+              )}
+
+              {/* Stock */}
+              <div className="mb-4">
+                {isOutOfStock ? (
+                  <span className="badge bg-danger">
+                    Out of Stock
+                  </span>
+                ) : (
+                  <span className="badge bg-success">
+                    {product.stock} available
+                  </span>
                 )}
               </div>
 
-              <strong>{rating}</strong>
+              {/* Quantity */}
+              {!isOutOfStock && (
+                <div className="mb-4">
+                  <h6 className="mb-2">
+                    Quantity
+                  </h6>
 
-              <span>
-                {reviewCount > 0
-                  ? `${reviewCount} ${
-                      reviewCount === 1
-                        ? "review"
-                        : "reviews"
-                    }`
-                  : "No reviews yet"}
-              </span>
-            </div>
-
-            {/* Price */}
-            <div className="product-details-price-box">
-              <span className="product-details-price-label">
-                Current Price
-              </span>
-
-              <div className="product-details-price">
-                ${product.price.toFixed(2)}
-              </div>
-
-              <span className="product-details-price-note">
-                Free delivery included
-              </span>
-            </div>
-
-            {/* Description */}
-            <div className="product-details-description">
-              <h2>About this product</h2>
-
-              <p>
-                {product.description}
-              </p>
-            </div>
-
-            {/* Stock Information */}
-            {!isOutOfStock && (
-              <div className="product-stock-information">
-                <div className="stock-info-top">
-                  <span>Availability</span>
-                  <strong>
-                    {product.stock} units available
-                  </strong>
-                </div>
-
-                <div className="stock-progress">
-                  <div
-                    className="stock-progress-bar"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        Math.max(
-                          8,
-                          (product.stock / 100) * 100
-                        )
-                      )}%`,
-                    }}
+                  <QuantityControl
+                    quantity={quantity}
+                    onChange={handleQuantityChange}
+                    max={product.stock}
                   />
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Quantity */}
-            {!isOutOfStock && (
-              <div className="product-details-quantity-section">
-                <div className="product-details-quantity-heading">
-                  <label>
-                    Quantity
-                  </label>
+              {/* Actions */}
+              <div className="product-details-actions d-flex flex-wrap gap-2">
 
-                  <span>
-                    Maximum {product.stock}
-                  </span>
-                </div>
+                {/* Add To Cart */}
+                <button
+                  type="button"
+                  className="product-action-cart btn btn-outline-dark"
+                  disabled={isOutOfStock}
+                  onClick={handleAddToCart}
+                >
+                  🛒 Add to Cart
+                </button>
 
-                <QuantityControl
-                  value={quantity}
-                  max={product.stock}
-                  onChange={setQuantity}
-                />
-              </div>
-            )}
+                {/* Order Now */}
+                <button
+                  type="button"
+                  className="product-action-order btn btn-dark"
+                  disabled={isOutOfStock}
+                  onClick={handleOrderNow}
+                >
+                  ⚡ Order Now
+                </button>
 
-            {/* Success Message */}
-            {addedMessage && (
-              <div
-                className="product-added-message"
-                role="status"
-                aria-live="polite"
-              >
-                <span className="product-added-icon">
-                  ✓
-                </span>
+                {/* Wishlist */}
+                <button
+                  type="button"
+                  className="product-action-wishlist btn btn-outline-danger"
+                  onClick={handleWishlistToggle}
+                  aria-label={
+                    wishlisted
+                      ? "Remove from wishlist"
+                      : "Add to wishlist"
+                  }
+                >
+                  {wishlisted ? "❤️" : "🤍"}{" "}
+                  {wishlisted
+                    ? "Remove from Wishlist"
+                    : "Add to Wishlist"}
+                </button>
 
-                <div>
-                  <strong>Added to cart</strong>
-                  <span>{addedMessage}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Main Actions */}
-            <div className="product-details-actions">
-
-              <button
-                type="button"
-                className="product-action-cart"
-                disabled={isOutOfStock}
-                onClick={handleAddToCart}
-              >
-                <span>🛒</span>
-
-                {isOutOfStock
-                  ? "Out of Stock"
-                  : "Add to Cart"}
-              </button>
-
-              <button
-                type="button"
-                className="product-action-order"
-                disabled={isOutOfStock}
-                onClick={handleOrderNow}
-              >
-                <span>⚡</span>
-                Order Now
-              </button>
-
-            </div>
-
-            {/* Wishlist */}
-            <button
-              type="button"
-              className={`product-details-wishlist ${
-                saved ? "saved" : ""
-              }`}
-              aria-pressed={saved}
-              onClick={handleWishlistToggle}
-            >
-              <span>
-                {saved ? "♥" : "♡"}
-              </span>
-
-              {saved
-                ? "Saved to Wishlist"
-                : "Save to Wishlist"}
-            </button>
-
-            {/* Delivery / Service Information */}
-            <div className="product-service-box">
-
-              <div className="product-service-item">
-                <span className="product-service-icon">
-                  🚚
-                </span>
-
-                <div>
-                  <strong>Free Delivery</strong>
-                  <span>
-                    Delivery is included with your order.
-                  </span>
-                </div>
               </div>
 
-              <div className="product-service-divider" />
-
-              <div className="product-service-item">
-                <span className="product-service-icon">
-                  🔒
-                </span>
-
-                <div>
-                  <strong>Secure Checkout</strong>
-                  <span>
-                    Simple and protected checkout experience.
-                  </span>
-                </div>
+              {/* Back to Products */}
+              <div className="mt-4">
+                <Link
+                  to="/products"
+                  className="btn btn-link px-0"
+                >
+                  ← Back to Products
+                </Link>
               </div>
 
             </div>
-
           </div>
-        </section>
+        </div>
 
-        {/* Bottom Navigation */}
-        <div className="product-details-bottom">
-          <Link
-            to="/products"
-            className="product-back-link"
-          >
-            <span>←</span>
-            Back to Products
-          </Link>
+        {/* Additional Product Information */}
+        <div className="row mt-5">
+          <div className="col-12">
+            <div className="product-details-extra">
 
-          <span className="product-bottom-message">
-            Find something you love? Save it or order it instantly.
-          </span>
+              {product.brand && (
+                <p>
+                  <strong>Brand:</strong>{" "}
+                  {product.brand}
+                </p>
+              )}
+
+              {product.sku && (
+                <p>
+                  <strong>SKU:</strong>{" "}
+                  {product.sku}
+                </p>
+              )}
+
+              {product.category && (
+                <p>
+                  <strong>Category:</strong>{" "}
+                  {product.category}
+                </p>
+              )}
+
+            </div>
+          </div>
         </div>
 
       </div>
-    </main>
+    </div>
   );
 }
 
 export default ProductDetails;
-
